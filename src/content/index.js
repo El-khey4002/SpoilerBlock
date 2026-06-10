@@ -3,6 +3,12 @@ import { getKeywords, getSettings } from '../utils/storage.js'
 const ANTISPOIL_CLASS = 'antispoil-block'
 const ANTISPOIL_OVERLAY_CLASS = 'antispoil-overlay'
 
+// ─── Utilitaires ─────────────────────────────────────────────────────────────
+
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 // ─── Injection du CSS dans la page ───────────────────────────────────────────
 
 function injectStyles(color, displayStyle) {
@@ -89,13 +95,16 @@ function injectStyles(color, displayStyle) {
 // ─── Masquage du texte ────────────────────────────────────────────────────────
 
 function maskTextNode(textNode, keyword, displayStyle) {
+  const parent = textNode.parentElement
+  if (!parent || parent.closest(`.${ANTISPOIL_CLASS}`)) return false
+
   const text = textNode.textContent
   const lowerText = text.toLowerCase()
   const lowerKeyword = keyword.toLowerCase()
 
   if (!lowerText.includes(lowerKeyword)) return false
 
-  const parts = text.split(new RegExp(`(${keyword})`, 'gi'))
+  const parts = text.split(new RegExp(`(${escapeRegex(keyword)})`, 'gi'))
   const wrapper = document.createElement('span')
 
   parts.forEach((part) => {
@@ -114,7 +123,6 @@ function maskTextNode(textNode, keyword, displayStyle) {
       block.appendChild(badge)
       block.appendChild(maskedText)
 
-      // clic pour révéler
       block.addEventListener('click', () => {
         block.replaceWith(document.createTextNode(part))
       })
@@ -133,9 +141,12 @@ function maskTextNode(textNode, keyword, displayStyle) {
 
 function maskImage(img, keyword, displayStyle) {
   if (img.dataset.antispoilDone) return
-  img.dataset.antispoilDone = 'true'
 
   const parent = img.parentElement
+  if (!parent) return
+
+  img.dataset.antispoilDone = 'true'
+
   const wrapper = document.createElement('span')
   wrapper.className = ANTISPOIL_OVERLAY_CLASS
   wrapper.style.display = 'inline-block'
@@ -153,7 +164,6 @@ function maskImage(img, keyword, displayStyle) {
   cover.appendChild(badge)
   wrapper.appendChild(cover)
 
-  // clic pour révéler
   cover.addEventListener('click', () => cover.remove())
 }
 
@@ -182,7 +192,7 @@ function scanDOM(keywords, displayStyle) {
         if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT'].includes(tag)) {
           return NodeFilter.FILTER_REJECT
         }
-        if (parent.classList.contains(ANTISPOIL_CLASS)) {
+        if (parent.closest(`.${ANTISPOIL_CLASS}, .${ANTISPOIL_OVERLAY_CLASS}`)) {
           return NodeFilter.FILTER_REJECT
         }
         return NodeFilter.FILTER_ACCEPT
@@ -201,7 +211,7 @@ function scanDOM(keywords, displayStyle) {
   })
 
   // Scan images
-  document.querySelectorAll('img').forEach((img) => {
+  document.querySelectorAll('img:not([data-antispoil-done])').forEach((img) => {
     const context = getImageContext(img)
     keywords.forEach((keyword) => {
       if (context.includes(keyword.toLowerCase())) {
@@ -214,8 +224,20 @@ function scanDOM(keywords, displayStyle) {
 // ─── MutationObserver (pages dynamiques) ─────────────────────────────────────
 
 function observeDOM(keywords, displayStyle) {
-  const observer = new MutationObserver(() => {
-    scanDOM(keywords, displayStyle)
+  let timeout = null
+
+  const observer = new MutationObserver((mutations) => {
+    const isOwnMutation = mutations.every((m) =>
+      [...m.addedNodes].every(
+        (n) =>
+          n.classList?.contains(ANTISPOIL_CLASS) ||
+          n.classList?.contains(ANTISPOIL_OVERLAY_CLASS)
+      )
+    )
+    if (isOwnMutation) return
+
+    clearTimeout(timeout)
+    timeout = setTimeout(() => scanDOM(keywords, displayStyle), 200)
   })
 
   observer.observe(document.body, {
