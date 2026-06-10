@@ -1,0 +1,1 @@
+console.log('AntiSpoil content script loaded')
